@@ -72,11 +72,13 @@ export function pinAnimations(elapsed: number) {
     // ponytail: scroll-driven animations are progress based and follow scroll
     // position rather than the document timeline, so they are left alone.
     if (animation.timeline !== document.timeline) continue;
-    if (!window.animationStartTimes.has(animation)) {
+    let startTime = window.animationStartTimes.get(animation);
+    if (startTime === undefined) {
       animation.pause();
-      window.animationStartTimes.set(animation, elapsed);
+      startTime = elapsed;
+      window.animationStartTimes.set(animation, startTime);
     }
-    animation.currentTime = elapsed - window.animationStartTimes.get(animation);
+    animation.currentTime = elapsed - startTime;
   }
 }
 

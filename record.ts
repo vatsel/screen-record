@@ -62,7 +62,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { once, type EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ACTION_SECONDS, SETTLE_MILLISECONDS, STALLED_BUDGET_MILLISECONDS } from './lib/constants.ts';
 import { captureFrame } from './lib/capture.ts';
@@ -77,7 +77,7 @@ import {
 } from './lib/motion.ts';
 import { USAGE, frameDevice, parseOptions } from './lib/options.ts';
 import * as pageScript from './lib/page.ts';
-import type { CaptureState, Clip, PointerPath } from './lib/types.ts';
+import type { CaptureState, Clip, PointerPath, VirtualTimePolicy } from './lib/types.ts';
 import { chromium } from 'playwright';
 
 const parsed = parseOptions(process.argv.slice(2));
@@ -119,6 +119,9 @@ const page = await browser.newPage({
   deviceScaleFactor: scale,
 });
 const cdp = await page.context().newCDPSession(page);
+// Playwright's CDPSession is a real EventEmitter, but its published type declares only
+// the subscribe half of the interface, which node's once() will not take.
+const cdpEvents = cdp as unknown as EventEmitter;
 
 // Page.captureScreenshot ignores the context's deviceScaleFactor and hands back CSS
 // pixels, so state the scale where CDP will see it.
@@ -256,9 +259,9 @@ ffmpeg.stdin.end();
 const [code] = await once(ffmpeg, 'close');
 process.exit(code);
 
-async function advanceVirtualTime(budget: number, policy = 'pauseIfNetworkFetchesPending') {
+async function advanceVirtualTime(budget: number, policy: VirtualTimePolicy = 'pauseIfNetworkFetchesPending') {
   const abort = new AbortController();
-  const expired = once(cdp, 'Emulation.virtualTimeBudgetExpired', { signal: abort.signal })
+  const expired = once(cdpEvents, 'Emulation.virtualTimeBudgetExpired', { signal: abort.signal })
     .then(() => true, () => false);
   const timedOut = delay(STALLED_BUDGET_MILLISECONDS, false, { signal: abort.signal })
     .catch(() => false);

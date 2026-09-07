@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    // page.ts runs inside the browser, everything else in node.
+    "lib": ["ESNext", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    // No build step: node runs the .ts files directly via type stripping, so tsc only
+    // ever checks. The .ts import extensions node requires need noEmit to be allowed,
+    // and erasableSyntaxOnly/verbatimModuleSyntax hold the code to what stripping can
+    // actually erase.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["record.ts", "lib/**/*.ts", "test/**/*.ts"]
+}

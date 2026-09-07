@@ -1,6 +1,7 @@
 {
   "type": "module",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.ts\"",
     "test:unit": "node --test \"test/{motion,layout,options,capture}.test.ts\""
   },
@@ -8,6 +9,7 @@
     "playwright": "^1.63.0"
   },
   "devDependencies": {
-    "@types/node": "^26.4.1"
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
   }
 }

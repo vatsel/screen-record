@@ -2,13 +2,13 @@
  * that is the point of them: a fake DOM would agree with whatever we believed. */
 
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { once, type EventEmitter } from 'node:events';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { after, before, describe, test, type TestContext } from 'node:test';
 import { chromium, type Browser, type CDPSession, type Page } from 'playwright';
 import { systemCursors } from '../lib/cursors.ts';
 import * as pageScript from '../lib/page.ts';
-import type { SystemCursor } from '../lib/types.ts';
+import type { SystemCursor, VirtualTimePolicy } from '../lib/types.ts';
 
 const FIXTURE = pathToFileURL(fileURLToPath(new URL('./fixtures/page.html', import.meta.url))).href;
 
@@ -37,8 +37,10 @@ async function openFixture(t: TestContext, { scale = 1, frozen = true } = {}) {
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 800, height: 600, deviceScaleFactor: scale, mobile: false,
   });
-  const advance = async (budget: number, policy = 'pauseIfNetworkFetchesPending') => {
-    const expired = once(cdp, 'Emulation.virtualTimeBudgetExpired');
+  const advance = async (budget: number, policy: VirtualTimePolicy = 'pauseIfNetworkFetchesPending') => {
+    // CDPSession is an EventEmitter whose published type omits the emit half. Same cast
+    // as record.ts.
+    const expired = once(cdp as unknown as EventEmitter, 'Emulation.virtualTimeBudgetExpired');
     await cdp.send('Emulation.setVirtualTimePolicy', { policy, budget, maxVirtualTimeTaskStarvationCount: 10000 });
     await expired;
   };

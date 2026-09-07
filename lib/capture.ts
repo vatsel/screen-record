@@ -11,14 +11,14 @@ import {
   STILL_FRAME_MILLISECONDS,
   STILL_FRAME_NUDGES,
 } from './constants.ts';
-import type { CaptureState } from './types.ts';
+import type { CaptureState, VirtualTimePolicy } from './types.ts';
 
 export type CaptureDeps = {
   // Asks the compositor for a picture. Answered by the next frame it draws.
   screenshot: () => Promise<{ data: string }>;
   // Spends virtual time. The policy is the one the recording normally runs on unless a
   // nudge overrides it.
-  advance: (budget: number, policy?: string) => Promise<void>;
+  advance: (budget: number, policy?: VirtualTimePolicy) => Promise<void>;
   frameBudgetMilliseconds: number;
   stillFrameMilliseconds?: number;
   stalledBudgetMilliseconds?: number;

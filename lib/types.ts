@@ -78,3 +78,8 @@ export type CaptureState = {
   lastFrame?: Buffer;
   stillFrames: number;
 };
+
+// How CDP is told to spend the virtual clock. Playwright ships this union inside its
+// Protocol namespace, which the public entry point does not re-export, so it is spelled
+// out here rather than reached for through the package's internals.
+export type VirtualTimePolicy = 'advance' | 'pause' | 'pauseIfNetworkFetchesPending';

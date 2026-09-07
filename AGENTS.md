@@ -1,8 +1,9 @@
 # screen-record
 
-Records a web page to an mp4. No build step and no config file: Node runs the
-TypeScript directly via type stripping (Node 22.18+), so every file is executed
-as-is.
+Records a web page to an mp4. No build step: Node runs the TypeScript directly
+via type stripping (Node 22.18+), so every file is executed as-is. `tsconfig.json`
+is `noEmit` and exists only so the editor and `pnpm run typecheck` see the same
+thing Node does.
 
 ```
 record.ts          the entry: the flags, the ffmpeg pipe, the browser, the frame loop
@@ -15,6 +16,7 @@ lib/capture.ts     one frame, and telling a late one from a page that has stoppe
 lib/cursors.ts     the swift snippet that reads macOS's cursors out of AppKit
 lib/page.ts        code that runs INSIDE the browser
 test/              node --test; test/fixtures/page.html is a page that moves
+tsconfig.json      typechecking only; no emit, no build
 ```
 
 Everything under `lib/` except `page.ts` and `cursors.ts` is pure and has a test
@@ -32,6 +34,7 @@ node record.ts --url https://example.com --hover 'nav a' --scale 4
 ```
 pnpm test           everything, about 25s
 pnpm run test:unit  the pure suites only, under a second
+pnpm run typecheck  tsc --noEmit, no build output
 ```
 
 Needs `ffmpeg` on PATH and playwright's chromium (`pnpm exec playwright install chromium`).
