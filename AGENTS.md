@@ -56,13 +56,27 @@ consequences that dictate most of the code:
   budget is spent -- asking afterwards races the frame and loses at random, and loses
   outright on a busy machine. This is what `capture()` does, which is why it owns the
   advance rather than the frame loop.
-- **A late frame and a still page look identical, and only a nudge tells them apart.**
-  When a shot goes unanswered, running the clock again with plain `advance` frees it
-  every time it was merely late (measured 100%), and never frees it when the page drew
-  nothing. That is the test -- never a longer timeout, which just mistakes a loaded
-  machine for a still page and silently freezes the recording. `pauseIfNetworkFetchesPending`
-  is no good for the nudge: it refuses to move the clock while a request is outstanding,
-  which is exactly when wedges happen.
+- **Screenshot requests are not independent, and giving up on one does not cancel it.**
+  CDP has no cancel for `captureScreenshot`; an abandoned request stays live, and Chromium
+  answers them in order, so every later request queues behind a stuck one. Measured on a
+  real site: 25 abandoned shots all answered in the same instant, in FIFO order, ages
+  spaced one frame apart. That is why `captureFrame` **carries** an unanswered shot in
+  `CaptureState.pending` and waits on it again next frame instead of asking twice. Asking
+  once per frame is what turned a compositor that was merely slow into a recording frozen
+  to the end. It also means a static page costs one request for the whole recording rather
+  than one per frame.
+- **An unanswered shot means a loaded machine, not a still page.** `Page.captureScreenshot`
+  resolves whether or not the page drew anything: measured on a static `data:` page with a
+  paused clock, three consecutive shots all came back in ~33ms, and across 138 frames of a
+  real site clipped at scale 2 the answer time was p50 33ms, p99 65ms, max 77ms, with none
+  over 500ms. So a shot that has not landed is late, and every frame waits the same
+  `STILL_FRAME_MILLISECONDS` for it before nudging -- **never a shorter wait for a frame
+  that follows a still one.** That shortcut used to exist and it was a latch: it halved the
+  patience of exactly the frames most likely to be slow, so a single slow frame froze the
+  rest of the recording into a repeat of its last image behind a zero exit code. The
+  repeat-last-frame fallback is still there, but reaching it is now the rare case it was
+  always meant to be. `pauseIfNetworkFetchesPending` is no good for the nudge: it refuses
+  to move the clock while a request is outstanding, which is exactly when wedges happen.
 
 Screenshots go through raw CDP, not `page.screenshot()` — the latter waits for
 visual stability and hangs once animations are pinned. PNGs are piped straight
@@ -169,9 +183,21 @@ ffmpeg -i /tmp/check.mp4 -vf "select='eq(n\,75)'" -fps_mode passthrough /tmp/f_%
 ```
 
 A recording that ends with "the page drew nothing new for the last N frames" is
-reporting frozen output; N should be 0 on any page that moves. Don't use
-`example.com` as the check: nothing on it moves or scrolls, so it exercises only the
-still path and takes ~40s to say so.
+reporting frozen output; N should be 0 on any page that moves. That line only counts the
+*final* streak, so it understates the damage -- count the frames carrying real picture
+instead, which is what `substantialFrames` does in `test/record.e2e.test.ts`:
+
+```
+ffprobe -v error -select_streams v:0 -show_entries packet=size -of csv=p=0 /tmp/check.mp4 \
+  | awk '{n++; if($1>60) s++} END {printf "substantial=%d/%d\n", s+0, n}'
+```
+
+An action shot parks the pointer for its lead-in, dwell and lead-out, so roughly half
+repeated frames is healthy; a handful out of hundreds means the capture stalled. Don't use
+`example.com` as the check: nothing on it moves or scrolls, so it says very little. It is
+worth one run as a floor, though -- `--hover 'a' --scale 4 --seconds 3` on it records in
+about 7s with no still frames at all. It used to take ~73s and report 95 frozen frames,
+which is the clearest single measure of what carrying the shot bought.
 
 One thing the tests found that the recorder relies on without saying so: a scroll
 issued as the very first evaluate after the load settle wedges the renderer. The

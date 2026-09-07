@@ -55,6 +55,19 @@ async function probe(file: string) {
   return { width: stream.width, height: stream.height, frames: Number(stream.nb_read_frames) };
 }
 
+// How many frames carry real picture rather than being a repeat of the one before.
+// A frame identical to its predecessor encodes to a couple of dozen bytes, so the packet
+// sizes separate the two without decoding anything. This is what catches a recording that
+// is technically the right length but is actually two images repeated -- the shape the
+// still-frame latch used to produce.
+async function substantialFrames(file: string) {
+  const { stdout } = await run('ffprobe', [
+    '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=size', '-of', 'csv=p=0', file,
+  ]);
+  const sizes = stdout.trim().split('\n').map(Number);
+  return { substantial: sizes.filter((size) => size > 60).length, frames: sizes.length };
+}
+
 // One frame out of the file, as bytes.
 function frameAt(file: string, index: number) {
   const png = join(workspace, `${index}-${Date.now()}.png`);
@@ -108,6 +121,14 @@ describe('recording a page', { skip: missing && 'ffmpeg is not on PATH', timeout
     assert.equal(probed.height, Math.floor(Number(announced[2]) / 2) * 2);
     assert.ok(probed.width < 320 && probed.height < 240, 'cropped smaller than the viewport');
     assert.equal(probed.frames, Math.round(ACTION_SECONDS * 10));
+
+    // The pointer is deliberately parked for the lead-in, the dwell and the lead-out, so
+    // a healthy hover shot is around half repeated frames and that is fine. What is not
+    // fine is a recording made of two images: a stalled capture used to produce exactly
+    // the right frame count with nothing moving in it, behind a zero exit code.
+    const drawn = await substantialFrames(out);
+    // Measured at 17 of 23 on this fixture; the floor leaves room for encoder drift.
+    assert.ok(drawn.substantial >= 10, `only ${drawn.substantial} of ${drawn.frames} frames carry picture`);
   });
 
   test('--focus needs no cursor and so needs no swift', async () => {

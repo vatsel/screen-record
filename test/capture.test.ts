@@ -42,6 +42,32 @@ function fakeBrowser({ frame = 'now' as 'now' | 'never' | 'on-nudge' } = {}) {
   return { deps, calls, advances };
 }
 
+// A stand-in browser that answers screenshots the way Chromium does rather than the way
+// a mock finds convenient: a request stays live until the compositor presents, and giving
+// up on one does not cancel it. `present()` answers the whole backlog at once, which is
+// what a real browser does when a throttled virtual clock finally lets it draw.
+function queuedBrowser({ fails = false } = {}) {
+  const waiting: ((frame: { data: string }) => void)[] = [];
+  let issued = 0;
+
+  const deps: CaptureDeps = {
+    screenshot: () => {
+      issued += 1;
+      if (fails) return Promise.reject(new Error('Target closed'));
+      return new Promise((resolve) => waiting.push(resolve));
+    },
+    advance: async () => { await delay(1); },
+    frameBudgetMilliseconds: 1000 / 60,
+    stillFrameMilliseconds: 40,
+    stalledBudgetMilliseconds: 120,
+  };
+  return {
+    deps,
+    present: () => { for (const resolve of waiting.splice(0)) resolve({ data: DATA }); },
+    get issued() { return issued; },
+  };
+}
+
 describe('a frame the page draws', () => {
   test('is asked for before the clock runs, not after', async () => {
     // Asking afterwards races the frame the compositor already drew, and loses at random.
@@ -107,33 +133,81 @@ describe('a page that has stopped drawing', () => {
     assert.equal(state.stillFrames, 2);
   });
 
-  test('stops being waited on once it is known to be still', async () => {
-    // A static page would otherwise cost the full patience on every one of its frames.
-    const { deps } = fakeBrowser({ frame: 'never' });
-    const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
+  test('is still waited on in full, so one slow frame cannot latch the recording', async () => {
+    // The bug this replaces: a frame following a still one used to skip the wait before
+    // the nudge, so it got half the patience of a fresh frame -- and the frames most
+    // likely to be slow are the ones right after a slow frame. One slow frame then
+    // latched the recording into repeating its last image to the end, behind a zero exit
+    // code. A shot slower than one patience but well inside two has to still land.
+    const deps: CaptureDeps = {
+      screenshot: () => delay(90, { data: DATA }),
+      advance: async () => {},
+      frameBudgetMilliseconds: 16,
+      stillFrameMilliseconds: 60,
+      stalledBudgetMilliseconds: 300,
+    };
+    const state: CaptureState = { stillFrames: 4, lastFrame: Buffer.from('previous') };
 
-    const startedFirst = Date.now();
-    await captureFrame(deps, state);
-    const firstFrame = Date.now() - startedFirst;
-
-    const startedSecond = Date.now();
-    await captureFrame(deps, state);
-    const secondFrame = Date.now() - startedSecond;
-
-    // The first waits, then nudges and waits again; the second goes straight to the
-    // nudge. The wait after a nudge is never shortened -- that one is the test.
-    assert.ok(secondFrame < firstFrame - 15, `${secondFrame}ms vs ${firstFrame}ms`);
+    assert.deepEqual(await captureFrame(deps, state), PNG, 'the slow frame was used');
+    assert.equal(state.stillFrames, 0, 'and the streak was broken rather than latched');
   });
 
   test('and draws again the moment it has something new', async () => {
-    const { deps: still } = fakeBrowser({ frame: 'never' });
+    const browser = queuedBrowser();
     const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
-    await captureFrame(still, state);
+    await captureFrame(browser.deps, state);
     assert.equal(state.stillFrames, 1);
 
-    const { deps: drawing } = fakeBrowser();
-    assert.deepEqual(await captureFrame(drawing, state), PNG);
+    // The compositor presents at last, in the gap between two frames.
+    browser.present();
+    assert.deepEqual(await captureFrame(browser.deps, state), PNG);
     assert.equal(state.stillFrames, 0);
+  });
+});
+
+describe('a shot the browser has not answered yet', () => {
+  test('is waited on again rather than asked for a second time', async () => {
+    // Giving up on a captureScreenshot does not cancel it, and Chromium answers them in
+    // order, so a second request just queues behind the stuck one. Asking again per frame
+    // is what turned a stalled compositor into a recording frozen to the end.
+    const browser = queuedBrowser();
+    const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
+    await captureFrame(browser.deps, state);
+    await captureFrame(browser.deps, state);
+    await captureFrame(browser.deps, state);
+    assert.equal(browser.issued, 1, 'one request outstanding, not one per frame');
+    assert.equal(state.stillFrames, 3);
+  });
+
+  test('is adopted on the frame it finally arrives at, however late that is', async () => {
+    const browser = queuedBrowser();
+    const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
+    for (let frame = 0; frame < 5; frame++) await captureFrame(browser.deps, state);
+    assert.equal(state.stillFrames, 5);
+
+    browser.present();
+    assert.deepEqual(await captureFrame(browser.deps, state), PNG, 'the late answer was used');
+    assert.equal(state.stillFrames, 0, 'and the streak broken');
+    assert.equal(browser.issued, 1);
+  });
+
+  test('is dropped rather than carried when the request itself failed', async () => {
+    // The trap: a rejected shot resolves to "no frame", which reads exactly like a still
+    // page. Carrying it would mean waiting forever on an already-settled promise and
+    // never asking for another picture.
+    const browser = queuedBrowser({ fails: true });
+    const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
+    assert.deepEqual(await captureFrame(browser.deps, state), Buffer.from('previous'));
+    await captureFrame(browser.deps, state);
+    assert.equal(browser.issued, 2, 'a fresh request each frame, not a dead one carried');
+  });
+
+  test('costs a static page one request for the whole recording', async () => {
+    const browser = queuedBrowser();
+    const state: CaptureState = { stillFrames: 0, lastFrame: Buffer.from('previous') };
+    for (let frame = 0; frame < 10; frame++) await captureFrame(browser.deps, state);
+    assert.equal(browser.issued, 1);
+    assert.equal(state.stillFrames, 10);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   STILL_FRAME_MILLISECONDS,
   STILL_FRAME_NUDGES,
 } from './constants.ts';
-import type { CaptureState, VirtualTimePolicy } from './types.ts';
+import type { CaptureState, PendingShot, VirtualTimePolicy } from './types.ts';
 
 export type CaptureDeps = {
   // Asks the compositor for a picture. Answered by the next frame it draws.
@@ -25,15 +25,30 @@ export type CaptureDeps = {
   nudges?: number;
 };
 
-// Waits for the compositor to answer, or gives up and says so.
-async function settle(shot: Promise<{ data: string }>, patience: number) {
+// Waits for the compositor to answer, or gives up and says so. Giving up here does not
+// end the request -- see PendingShot.
+async function settle(shot: PendingShot, patience: number) {
   const abort = new AbortController();
   const drawn = await Promise.race([
-    shot.then((frame) => frame, () => undefined),
+    shot.promise,
     delay(patience, undefined, { signal: abort.signal }).then(() => undefined, () => undefined),
   ]);
   abort.abort();
   return drawn;
+}
+
+// Asks for a picture, and tracks whether that request is still outstanding. A rejection
+// reads as "no frame" rather than throwing: a CDP error and a page that drew nothing get
+// the same fallback, and the recording carries on.
+function issueShot(deps: CaptureDeps): PendingShot {
+  const pending: PendingShot = {
+    settled: false,
+    promise: deps.screenshot().then(
+      (frame) => { pending.settled = true; return frame; },
+      () => { pending.settled = true; return undefined; },
+    ),
+  };
+  return pending;
 }
 
 // ponytail: page.screenshot() waits for the page to look stable and hangs once the
@@ -46,43 +61,53 @@ async function settle(shot: Promise<{ data: string }>, patience: number) {
 // busy enough that the frame lands first. Spending the frame's budget is therefore part
 // of taking the picture, which is why the advance lives in here.
 //
-// A page that draws nothing never answers at all, and that is not a failure: nothing was
-// redrawn because nothing changed, so the frame already in hand is still what the page
-// looks like. Handing that one to ffmpeg again is the honest answer, and the only one
-// available -- a page with no animation, no scrolling and no pointer on it produces
-// exactly one frame however long it is recorded for.
+// If a shot goes unanswered anyway, the frame already in hand is handed to ffmpeg again.
+// That is a fallback, not the normal path: measured against Chromium 1.63, a static page
+// with no animation, no network and a paused clock still answers every screenshot in
+// ~33ms. An earlier version of this file assumed the opposite -- that a page drawing
+// nothing never answers -- and shortened the wait for any frame following a still one.
+// That halved the patience of exactly the frames most likely to be slow, so one slow
+// frame latched the recording into repeating its last image to the end, at 500ms a frame,
+// behind a zero exit code. Every frame now gets the same full wait. If you are tempted to
+// make a still page cheaper by waiting less, measure first: the saving is imaginary
+// because the shot resolves, and the freeze is real.
 export async function captureFrame(deps: CaptureDeps, state: CaptureState): Promise<Buffer> {
   const stillPatience = deps.stillFrameMilliseconds ?? STILL_FRAME_MILLISECONDS;
   const stalledPatience = deps.stalledBudgetMilliseconds ?? STALLED_BUDGET_MILLISECONDS;
   const nudges = deps.nudges ?? STILL_FRAME_NUDGES;
 
-  const shot = deps.screenshot();
-  // A shot that is given up on still settles later, against a session that may be
-  // closed by then; nothing is waiting on it to notice.
-  shot.catch(() => {});
+  // A shot still outstanding from an earlier frame is waited on again rather than
+  // replaced. Every frame asks for the identical picture -- clip and format are fixed
+  // before the loop -- so an answer requested at an earlier frame is a valid picture for
+  // this one, taken at whatever moment the compositor finally presented. Issuing a second
+  // request instead is what used to turn a stalled compositor into a permanent freeze.
+  // A shot is kept until its answer has been used, not until it resolves -- one that lands
+  // in the gap between two frames still holds a picture nobody has taken yet.
+  const shot = state.pending ?? issueShot(deps);
+  state.pending = shot;
 
   await deps.advance(deps.frameBudgetMilliseconds);
 
-  // A frame that has not arrived is either late or was never drawn, and waiting longer
-  // cannot tell those apart -- on a loaded machine a real frame is simply slow, and on
-  // a still page no amount of patience produces one. Nudging the clock does tell them
-  // apart: a late frame lands the moment virtual time runs again, every time, while a
-  // page with nothing to redraw stays silent however often it is asked. Plain advance
-  // for the nudge, since pauseIfNetworkFetchesPending will not move the clock at all
-  // while the page has a request outstanding, which is when wedges tend to happen.
-  // A page already known to be drawing nothing goes straight to the nudge rather than
-  // waiting first, which is what keeps a recording of a static page down to seconds a
-  // frame. The wait *after* a nudge is never shortened: that one is the test, and
-  // cutting it short is how a loaded machine gets mistaken for a still page and the
-  // recording quietly freezes.
-  const patience = state.stillFrames > 0 ? 0 : stillPatience;
-  let drawn = await settle(shot, state.lastFrame ? patience : stalledPatience);
+  // A frame that has not arrived is nearly always just late, so it gets the full wait --
+  // the same wait whether or not the frame before it was still. Then one nudge, since a
+  // late frame lands the moment virtual time runs again. Plain advance for the nudge,
+  // since pauseIfNetworkFetchesPending will not move the clock at all while the page has
+  // a request outstanding, which is when wedges tend to happen.
+  let drawn = await settle(shot, state.lastFrame ? stillPatience : stalledPatience);
   for (let nudge = 0; !drawn && state.lastFrame && nudge < nudges; nudge++) {
     await deps.advance(deps.frameBudgetMilliseconds, 'advance');
     drawn = await settle(shot, stillPatience);
   }
 
+  // A shot that settled without a frame -- a CDP error reaching the rejection arm of
+  // issueShot -- must be dropped, or every later frame waits on a promise already
+  // resolved to nothing and no screenshot is ever asked for again.
+  if (shot.settled && !drawn) {
+    state.pending = undefined;
+  }
+
   if (drawn) {
+    state.pending = undefined;
     state.stillFrames = 0;
     state.lastFrame = Buffer.from(drawn.data, 'base64');
     return state.lastFrame;

@@ -72,11 +72,21 @@ export type Options = {
   actionSelector?: string;
 };
 
-// What capture carries between frames: the last picture the page actually drew, and how
-// many frames in a row it has drawn nothing new.
+// A screenshot the browser has not answered yet. Giving up on one does not cancel it --
+// CDP has no cancel for captureScreenshot -- so it stays live and every later shot is
+// answered behind it. Carrying it means the next frame waits on the request already in
+// flight instead of adding another to the queue.
+export type PendingShot = {
+  promise: Promise<{ data: string } | undefined>;
+  settled: boolean;
+};
+
+// What capture carries between frames: the last picture the page actually drew, how many
+// frames in a row it has drawn nothing new, and any shot still outstanding.
 export type CaptureState = {
   lastFrame?: Buffer;
   stillFrames: number;
+  pending?: PendingShot;
 };
 
 // How CDP is told to spend the virtual clock. Playwright ships this union inside its

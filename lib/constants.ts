@@ -43,16 +43,22 @@ export const MAX_PAN_SECONDS = 600;
 // budgets return in milliseconds, so anything near this is already broken.
 export const STALLED_BUDGET_MILLISECONDS = 10000;
 
-// How long to wait for the compositor to answer a screenshot. Anything moving answers
-// within tens of milliseconds once the clock has run, so this is slack for a loaded
-// machine rather than a normal cost -- and being generous is what stops a machine under
-// load being mistaken for a page that has stopped drawing.
-export const STILL_FRAME_MILLISECONDS = 500;
+// How long to wait for the compositor to answer a screenshot. Measured against a real
+// site clipped at scale 2: p50 33ms, p99 65ms, max 77ms over 138 frames, and a static
+// page answers just as fast. So this is pure slack for a loaded machine, ~30x the p99,
+// and never a cost a healthy frame pays. Being generous is the whole point: every
+// millisecond under the true answer time is a frame wrongly called still.
+export const STILL_FRAME_MILLISECONDS = 2000;
 
 // How many nudges a frame gets before the page is taken to be drawing nothing at all. A
 // nudge frees a frame that was merely late every time it is tried, so a second one buys
 // nothing that waiting longer would not.
 export const STILL_FRAME_NUDGES = 1;
+
+// How often the frame counter reaches stderr, in wall-clock milliseconds. Counted in real
+// time and not in frames: the whole job of that line is to show a slow render moving, and
+// a cadence measured in frames goes quiet exactly when the render slows down.
+export const PROGRESS_INTERVAL_MILLISECONDS = 5000;
 
 // Virtual milliseconds handed to page load before the first frame. Too short and
 // the recording opens on a half-built page; too long only wastes wall time, since

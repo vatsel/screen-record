@@ -64,7 +64,12 @@
 import { spawn } from 'node:child_process';
 import { once, type EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ACTION_SECONDS, SETTLE_MILLISECONDS, STALLED_BUDGET_MILLISECONDS } from './lib/constants.ts';
+import {
+  ACTION_SECONDS,
+  PROGRESS_INTERVAL_MILLISECONDS,
+  SETTLE_MILLISECONDS,
+  STALLED_BUDGET_MILLISECONDS,
+} from './lib/constants.ts';
 import { captureFrame } from './lib/capture.ts';
 import { systemCursors } from './lib/cursors.ts';
 import { computeCrop, pointerPositionAt } from './lib/layout.ts';
@@ -209,7 +214,8 @@ const captureDeps = {
 
 // A silent multi-minute render is indistinguishable from a wedged one, and the mp4
 // only grows in 256KiB lurches so its size proves nothing. Report the rate instead.
-const startedAt = Date.now();
+let lastReportAt = Date.now();
+let lastReportFrame = -1;
 let stalledBudgets = 0;
 
 for (let frame = 0; frame < frameCount; frame++) {
@@ -241,9 +247,15 @@ for (let frame = 0; frame < frameCount; frame++) {
   if (!ffmpeg.stdin.write(png)) {
     await once(ffmpeg.stdin, 'drain');
   }
-  if (frame % fps === 0 || frame === frameCount - 1) {
-    const rate = (frame + 1) / ((Date.now() - startedAt) / 1000);
+  // The rate is the one since the last line rather than the average since the start: an
+  // average barely moves when a render stalls late, which is the case this line is here
+  // to show.
+  const now = Date.now();
+  if (frame === 0 || frame === frameCount - 1 || now - lastReportAt >= PROGRESS_INTERVAL_MILLISECONDS) {
+    const rate = (frame - lastReportFrame) / ((now - lastReportAt) / 1000);
     process.stderr.write(`\rframe ${frame + 1}/${frameCount} at ${rate.toFixed(1)} fps`);
+    lastReportAt = now;
+    lastReportFrame = frame;
   }
 }
 process.stderr.write('\n');
