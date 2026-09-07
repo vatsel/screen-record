@@ -1,9 +1,25 @@
 # screen-record
 
-One script, `record.ts`, that records a web page to an mp4. Everything else is
-`package.json` and lockfile. Keep it that way — no `src/`, no config file, no
-build step. Node runs the TypeScript directly via type stripping
-(Node 22.18+), so `record.ts` is executed as-is.
+Records a web page to an mp4. No build step and no config file: Node runs the
+TypeScript directly via type stripping (Node 22.18+), so every file is executed
+as-is.
+
+```
+record.ts          the entry: the flags, the ffmpeg pipe, the browser, the frame loop
+lib/constants.ts   the ALL-CAPS tuning block, FLICK_* and ACTION_*
+lib/types.ts       the shapes passed between the modules
+lib/options.ts     the command line, resolved and checked
+lib/motion.ts      when things move: the pan model and the action phases
+lib/layout.ts      where they are: the crop, and the pointer's path across it
+lib/capture.ts     one frame, and telling a late one from a page that has stopped
+lib/cursors.ts     the swift snippet that reads macOS's cursors out of AppKit
+lib/page.ts        code that runs INSIDE the browser
+test/              node --test; test/fixtures/page.html is a page that moves
+```
+
+Everything under `lib/` except `page.ts` and `cursors.ts` is pure and has a test
+file of its own. Keep it that way: logic that can only be reached by launching a
+browser is logic nothing checks.
 
 ## Running it
 
@@ -11,6 +27,11 @@ build step. Node runs the TypeScript directly via type stripping
 node record.ts --url https://example.com
 node record.ts --url https://example.com --mobile --scroll
 node record.ts --url https://example.com --hover 'nav a' --scale 4
+```
+
+```
+pnpm test           everything, about 25s
+pnpm run test:unit  the pure suites only, under a second
 ```
 
 Needs `ffmpeg` on PATH and playwright's chromium (`pnpm exec playwright install chromium`).
@@ -63,7 +84,7 @@ mid-stroke.
 
 Scroll motion (`--scroll`) is a constant drift with eased "flicks" on top, so it
 reads like a person reading rather than a camera on a rail. Its tuning lives in
-the ALL-CAPS constants at the top of the file, in *viewports* rather than pixels
+the ALL-CAPS constants in `lib/constants.ts`, in *viewports* rather than pixels
 so phone and desktop frames move at the same apparent rate. Action timings are the
 `ACTION_*` block, shared by both `--hover` and `--focus`. Those constants are
 deliberately not flags.
@@ -77,7 +98,7 @@ day one, and it stays wrong as the real one moves. The tell is code that *descri
 something the platform owns — SVG paths for a system cursor, a hand-written easing table
 where CSS has one, a date formatter, a colour-space conversion.
 
-This file previously drew two cursors as inline SVG paths. They looked uncanny, and
+The recorder previously drew two cursors as inline SVG paths. They looked uncanny, and
 worse, the shape was chosen once for the whole recording — so the pointer never changed
 on hover, which is exactly what makes a video read as fake. The fix was not a better
 path: it was asking AppKit for the real cursor and asking the page which one it wanted.
@@ -96,13 +117,22 @@ answer and will keep knowing it after the page changes.
 
 ## Editing rules
 
-- The header comment block is the user documentation. Change a flag or a
-  constant, change the header in the same edit.
-- New tuning knobs go in the ALL-CAPS block, not in `parseArgs`. Flags are for
+- The header comment block in `record.ts` is the user documentation. Change a
+  flag or a constant, change the header in the same edit.
+- New tuning knobs go in `lib/constants.ts`, not in `parseOptions`. Flags are for
   what changes per-recording (size, duration, output); constants are for what
   defines the house style of the motion.
-- comments mark deliberate shortcuts and name their ceiling. Don't
+- Everything in `lib/page.ts` is stringified by `page.evaluate` and evaluated in
+  the browser, where nothing outside the function body exists. **No free
+  variables** — no imports, no constants, no shared helpers; whatever it needs is
+  passed in as its argument. A type-only reference is fine, since stripping
+  erases it. `test/browser.test.ts` runs every one of them through
+  `page.evaluate`, which is what catches a slip.
+- `ponytail:` comments mark deliberate shortcuts and name their ceiling. Don't
   "fix" one without reading it — it's a decision, not an oversight.
+- A change to the pan model, the crop, the option handling or the still-frame
+  logic changes an assertion somewhere in `test/`. If it doesn't, the assertion
+  was missing.
 
 ## Dependencies
 
@@ -113,7 +143,14 @@ answer and will keep knowing it after the page changes.
 
 ## Verifying a change (for agents)
 
-There are no tests. Record a real page and watch it:
+`pnpm test` first. It covers the pan maths, the crop geometry, the option
+handling and the still-frame state machine on their own; the chromium
+assumptions this file spends its length on (virtual time, pinned animations,
+`clip.scale`, the cursor the page asks for) against a real browser; and the
+whole pipeline end to end against `test/fixtures/page.html`, which is a local
+file, so the suite runs offline.
+
+The suite does not watch the video. Record a real page and look at it:
 
 ```
 node record.ts --url <a page that actually animates> --scroll --out /tmp/check.mp4
@@ -132,3 +169,8 @@ A recording that ends with "the page drew nothing new for the last N frames" is
 reporting frozen output; N should be 0 on any page that moves. Don't use
 `example.com` as the check: nothing on it moves or scrolls, so it exercises only the
 still path and takes ~40s to say so.
+
+One thing the tests found that the recorder relies on without saying so: a scroll
+issued as the very first evaluate after the load settle wedges the renderer. The
+recorder measures the page height first, so it never does that -- keep any new work
+in that order.

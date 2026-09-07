@@ -1,0 +1,66 @@
+<meta charset="utf-8">
+<title>record.ts fixture</title>
+<style>
+  /* Tailwind's preflight, or the one line of it that matters: it is enough to render an
+     unguarded cursor image zero pixels wide. */
+  img { max-width: 100%; }
+
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; background: #fff; color: #111; }
+  section { height: 100vh; padding: 24px; box-sizing: border-box; }
+  section:nth-child(even) { background: #eef; }
+
+  /* Runs forever, so every frame of the recording has something new in it. A still
+     frame in a run over this page means the recorder stopped, not that the page did. */
+  #pulse {
+    width: 120px; height: 120px; background: #d33;
+    animation: pulse 1s linear infinite;
+  }
+  @keyframes pulse { from { transform: translateX(0); } to { transform: translateX(200px); } }
+
+  /* Plays once at the start: this is the intro that used to be burnt through during
+     page load before the animations were pinned. */
+  #intro { animation: intro 2s ease-out 1 both; }
+  @keyframes intro { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+
+  a#link { position: relative; cursor: pointer; font-size: 32px; }
+  /* An underline hanging outside the link's own box, which is what the crop has to take
+     the union of descendants to keep. */
+  a#link .underline {
+    position: absolute; left: -20px; right: -20px; bottom: -18px; height: 6px;
+    background: #06f; transform: scaleX(0); transform-origin: left;
+    transition: transform .25s ease-out;
+  }
+  a#link:hover .underline { transform: scaleX(1); }
+
+  /* Follows the scroll position rather than the document timeline, so pinAnimations
+     must leave it alone. */
+  #progress {
+    position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #0a0;
+    transform-origin: left; animation: grow auto linear;
+    animation-timeline: scroll(root block);
+  }
+  @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+  /* Cursors the page asks for by name: a fallback list, and one nothing maps to. */
+  #fallback { cursor: url(nothing-here.png) 4 4, pointer; }
+  #unmapped { cursor: cell; }
+
+  input { font-size: 24px; padding: 8px; outline-offset: 4px; }
+  input:focus { outline: 4px solid #06f; }
+</style>
+
+<div id="progress"></div>
+<section>
+  <h1 id="intro">record.ts fixture</h1>
+  <div id="pulse"></div>
+  <!-- The hidden span is a descendant whose box is 0x0 at 0,0: measuring it would drag
+     the crop to the top left corner of the page. -->
+  <p><a id="link" href="#">hover me<span class="underline"></span><span hidden></span></a></p>
+  <p><input id="field" placeholder="focus me"></p>
+  <p id="plain">plain text, no cursor rule of its own</p>
+  <p id="fallback">a cursor given as a fallback list</p>
+  <p id="unmapped">a cursor keyword macOS has nothing for</p>
+</section>
+<section><h2>two</h2></section>
+<section><h2>three</h2></section>
+<section><h2>four</h2></section>
