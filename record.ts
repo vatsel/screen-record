@@ -5,12 +5,13 @@
  * and scrubbed to each frame's own timestamp, which is what keeps the intro from being
  * skipped during page load and stops the animation clock outrunning the video.
  *
- * Needs ffmpeg on PATH and playwright's chromium installed.
+ * Needs ffmpeg on PATH and playwright's chromium installed. Node runs the TypeScript
+ * directly (type stripping, Node 22.18+); there is no build step.
  *
- *   node record.js --url https://example.com
+ *   node record.ts --url https://example.com
  *       Six seconds of the page sitting at the top, 1440x900 at 2x.
  *
- *   node record.js --url https://example.com --mobile --scroll
+ *   node record.ts --url https://example.com --mobile --scroll
  *       Phone frame, panning from the top of the page to the bottom.
  *
  * Frame:
@@ -101,7 +102,7 @@ const { values } = parseArgs({
 });
 
 if (!values.url) {
-  console.error('usage: node record.js --url <url> [--out out.mp4] [--fps 60] [--seconds 6] [--width] [--height] [--scale] [--mobile] [--scroll] [--hold 2]');
+  console.error('usage: node record.ts --url <url> [--out out.mp4] [--fps 60] [--seconds 6] [--width] [--height] [--scale] [--mobile] [--scroll] [--hold 2]');
   console.error('  --mobile  414x736 at 3x (1242x2208) with a phone user agent and touch, the most common mobile viewport width (desktop default is 1440x900 at 2x)');
   console.error('  --scroll  pan from the top of the page to the bottom, holding still for --hold seconds at each end');
   console.error('            how fast it pans is set by the FLICK_* constants at the top of the file, not by a flag');
@@ -186,13 +187,21 @@ await cdp.send('Emulation.setVirtualTimePolicy', { policy: 'pause' });
 await page.goto(values.url, { waitUntil: 'commit' });
 await advanceVirtualTime(SETTLE_MILLISECONDS);
 
+// The start times pinAnimations parks on the page live on window: it runs inside the
+// browser, so a module-scoped variable here would not be there.
+declare global {
+  interface Window {
+    animationStartTimes?: WeakMap<Animation, number>;
+  }
+}
+
 // Screenshots force compositor frames stamped with the real clock, so
 // document.timeline outruns virtual time -- mildly at scale 1, by more than 10x at
 // scale 2 -- and every CSS animation races ahead of the video. Paused animations
 // ignore the timeline, so hold them all and scrub each one to the exact frame time.
 // This also fixes the intro: without it the animations burn through the load settle
 // and Chrome backdates their start to the first painted frame.
-function pinAnimations(elapsed) {
+function pinAnimations(elapsed: number) {
   window.animationStartTimes ??= new WeakMap();
   for (const animation of document.getAnimations()) {
     // ponytail: scroll-driven animations are progress based and follow scroll
@@ -209,7 +218,7 @@ function pinAnimations(elapsed) {
 // Where the pan has got to, in CSS pixels, this far into the travel. The drift runs
 // the whole time; each completed flick has added its distance, and the one in progress
 // adds its share on a smoothstep so it eases in and out rather than snapping.
-function scrollOffsetAt(seconds) {
+function scrollOffsetAt(seconds: number) {
   // --linear is the whole model: one speed, start to finish, nothing riding on top.
   if (values.linear) {
     return linearPixelsPerSecond * seconds;
@@ -225,7 +234,7 @@ function scrollOffsetAt(seconds) {
 // Scroll position is set outright rather than animated: the page's own smooth
 // scrolling would run on the same untrustworthy clock the animations do, and
 // scroll-driven (progress based) animations follow whatever offset we land on.
-function scrollToProgress(progress) {
+function scrollToProgress(progress: number) {
   const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
   window.scrollTo({ top: progress * maxScroll, behavior: 'instant' });
 }
@@ -305,7 +314,7 @@ ffmpeg.stdin.end();
 const [code] = await once(ffmpeg, 'close');
 process.exit(code);
 
-async function advanceVirtualTime(budget) {
+async function advanceVirtualTime(budget: number) {
   const abort = new AbortController();
   const expired = once(cdp, 'Emulation.virtualTimeBudgetExpired', { signal: abort.signal })
     .then(() => true, () => false);

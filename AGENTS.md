@@ -1,14 +1,15 @@
 # screen-record
 
-One script, `record.js`, that records a web page to an mp4. Everything else is
+One script, `record.ts`, that records a web page to an mp4. Everything else is
 `package.json` and lockfile. Keep it that way — no `src/`, no config file, no
-build step.
+build step. Node runs the TypeScript directly via type stripping
+(Node 22.18+), so `record.ts` is executed as-is.
 
 ## Running it
 
 ```
-node record.js --url https://example.com
-node record.js --url https://example.com --mobile --scroll
+node record.ts --url https://example.com
+node record.ts --url https://example.com --mobile --scroll
 ```
 
 Needs `ffmpeg` on PATH and playwright's chromium (`pnpm exec playwright install chromium`).
@@ -59,7 +60,7 @@ deliberately not flags.
 There are no tests. Record a real page and watch it:
 
 ```
-node record.js --url https://example.com --scroll --out /tmp/check.mp4
+node record.ts --url https://example.com --scroll --out /tmp/check.mp4
 ```
 
 Check that the intro animation actually plays (not skipped during load), that
